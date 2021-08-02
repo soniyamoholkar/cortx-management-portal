@@ -105,6 +105,10 @@ class CSMWeb:
         self.conf_store_keys = {}
         self.is_cortxcli_installed = False
         
+    def _validate_nodejs_installed(self):
+        Log.info("Validating NodeJS 12.13.0")
+        print("Validating NodeJS 12.13.0")
+        PathV().validate('exists', ['file:///opt/nodejs/node-v12.13.0-linux-x64/bin/node'])
 
     def _validate_cortxcli(self):
         Log.info("Validating third party rpms")
@@ -207,7 +211,8 @@ class CSMWeb:
 
     def post_install(self):
         """ Performs post install operations. Raises exception on error """
-        #TODO: validate nodejs installed
+        self._validate_nodejs_installed()
+        print("_validate_nodejs_installed done")
         self._validate_cortxcli()
         print("_validate_cortxcli done")
         if self.is_cortxcli_installed:
