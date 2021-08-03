@@ -17,18 +17,18 @@
 import traceback
 import os
 import pwd
+import crypt
 from cortx.utils.log import Log
 from cortx.utils.conf_store import Conf
 from cortx.utils.kv_store.error import KvError
 from cortx.utils.validator.error import VError
 from cortx.utils.validator.v_pkg import PkgV
 from cortx.utils.validator.v_confkeys import ConfKeysV
-from cortx.utils.validator.v_network import NetworkV
+from cortx.utils.security.cipher import Cipher, CipherInvalidToken
 from cortx.utils.validator.v_path import PathV
 from payload import Text
 from datetime import datetime
 import subprocess
-import os
 
 
 class Process:
@@ -104,10 +104,10 @@ class CSMWeb:
         self.machine_id = CSMWeb._get_machine_id()
         self.server_node_info = f"server_node>{self.machine_id}"
         self.conf_store_keys = {}
+        self._is_env_dev = False
                 
     def _validate_nodejs_installed(self):
         Log.info("Validating NodeJS 12.13.0")
-        print("Validating NodeJS 12.13.0")
         PathV().validate('exists', ['file:///opt/nodejs/node-v12.13.0-linux-x64/bin/node'])
 
     def _validate_cortxcli(self):
@@ -128,15 +128,13 @@ class CSMWeb:
         ])
         
     def _set_deployment_mode(self):
-        """if Conf.get(CSMWeb.CONSUMER_INDEX, "DEPLOYMENT>mode") == const.DEV:
+        """if Conf.get(CSMWeb.CONSUMER_INDEX, "DEPLOYMENT>mode") == 'dev':
             Log.info("Running Csm Setup for Dev Mode.")
             self._is_env_dev = True"""
-        #TODO: Read .env file and set deployment mode as mentioned in .env.
-        Conf.load("env_index", f"properties://{self.CSM_ENV_FILE_PATH}")
-        if Conf.get("env_index","NODE_ENV") == "\"development\"":
+        if Conf.get(self.CONSUMER_INDEX, "DEPLOYMENT>mode") == 'dev':
             Log.info("Running Csm Setup for Dev Mode.")
-            print("Running Csm Setup for Dev Mode.")
             self._is_env_dev = True
+        print(f"self._is_env_dev: {self._is_env_dev}")
         Log.info("Setting deployment mode.")
 
     def _prepare_and_validate_confstore_keys(self, phase: str):
@@ -147,9 +145,10 @@ class CSMWeb:
                 })
         elif phase == "prepare":
             self.conf_store_keys.update({
+                "csm_user_key": "cortx>software>csm>user",
                 "server_node_info":self.server_node_info,
-                "data_public_fqdn":f"{self.server_node_info}>network>data>public_fqdn",
                 "cluster_id":f"{self.server_node_info}>cluster_id",
+                "secret_key": "cortx>software>csm>secret"
             })
         elif phase == "config":
             self.conf_store_keys.update({
@@ -208,7 +207,50 @@ class CSMWeb:
         else:
             os.makedirs("/etc/csm", exist_ok=True)
             CSMWeb._run_cmd("cp -r /opt/seagate/cortx/csm/conf/etc/csm /etc/csm")
-
+            
+    def _fetch_csm_user_password(self, decrypt=False):
+        """
+        This Method Fetches the Password for CSM User from Provisioner.
+        :param decrypt:
+        :return:
+        """
+        csm_user_pass = None
+        if self._is_env_dev:
+            decrypt = False
+        Log.info("Fetching CSM User Password from Conf Store.")
+        csm_user_pass = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["secret_key"])
+        if decrypt and csm_user_pass:
+            Log.info("Decrypting CSM Password.")
+            try:
+                cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
+                password_decryption_key = self.conf_store_keys["secret_key"].split('>')[0]
+                cipher_key = Cipher.generate_key(cluster_id, password_decryption_key)                
+            except KvError as error:
+                Log.error(f"Failed to Fetch Cluster Id. {error}")
+                return None
+            except Exception as e:
+                Log.error(f"{e}")
+                return None
+            try:
+                decrypted_value = Cipher.decrypt(cipher_key,
+                                                 csm_user_pass.encode("utf-8"))
+                return decrypted_value.decode("utf-8")
+            except CipherInvalidToken as error:
+                Log.error(f"Decryption for CSM Failed. {error}")
+                raise CipherInvalidToken(f"Decryption for CSM Failed. {error}")
+        return csm_user_pass
+            
+    def _set_password_to_csm_user(self):
+        if not self._is_user_exist():
+            raise CSMWebSetupError(f"{self._user} not created on system.")
+        Log.info("Fetch decrypted password.")
+        _password = self._fetch_csm_user_password(decrypt=True)
+        if not _password:
+            Log.error("CSM Password Not Available.")
+            raise CSMWebSetupError("CSM Password Not Available.")
+        _password = crypt.crypt(_password, "22")
+        self._run_cmd(f"usermod -p {_password} {self._user}")
+            
     def post_install(self):
         """ Performs post install operations for CSM Web as well as cortxcli. Raises exception on error """
         self._validate_nodejs_installed()
@@ -216,17 +258,20 @@ class CSMWeb:
         if os.environ.get("CLI_SETUP") == "true":
             CSMWeb._run_cmd(f"cli_setup post_install --config {self.conf_url}")
         self._prepare_and_validate_confstore_keys("post_install")
-        self._set_deployment_mode()
         self._set_service_user()
         self._config_user()
         self._configure_service_user()
         self._allow_access_to_pvt_ports()
-        self.create()
         return 0
 
     def prepare(self):
         """ Performs post install operations. Raises exception on error """
-        
+        if os.environ.get("CLI_SETUP") == "true":
+            CSMWeb._run_cmd(f"cli_setup prepare --config {self.conf_url}")
+        self._prepare_and_validate_confstore_keys("prepare")
+        self._set_deployment_mode()
+        self._set_service_user()
+        self._set_password_to_csm_user()
         return 0
 
     def config(self):
@@ -314,20 +359,14 @@ class CSMWeb:
             
     def _configure_service_user(self):
         """
-        Configures the Service user in CSM service files.
+        Configures the Service user in CSM web service files.
         :return:
         """
-        self._update_csm_web_file("<USER>", self._user)
-        
-    def _update_csm_web_file(self, key, value):
-        """
-        Update CSM Files Depending on Job Type of Setup.
-        """
-        Log.info(f"Update file for {key}:{value}")
+        Log.info(f"Update file for <USER>:{self._user}")
         service_file_data = Text(self.CSM_WEB_FILE).load()
         if not service_file_data:
             Log.warn(f"File {self.CSM_WEB_FILE} not updated.")            
-        data = service_file_data.replace(key, value)
+        data = service_file_data.replace('<USER>', self._user)
         Text(self.CSM_WEB_FILE).dump(data)
         
     def _allow_access_to_pvt_ports(self):

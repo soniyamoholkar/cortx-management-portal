@@ -103,7 +103,6 @@ class PrepareCmd(Cmd):
 
     def process(self):
         # TODO: Add actions here
-        self.csm_web._prepare_and_validate_confstore_keys("prepare")
         rc = self.csm_web.prepare()
         return rc
 
