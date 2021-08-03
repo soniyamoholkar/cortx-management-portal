@@ -28,6 +28,7 @@ from cortx.utils.validator.v_path import PathV
 from payload import Text
 from datetime import datetime
 import subprocess
+import os
 
 
 class Process:
@@ -103,8 +104,7 @@ class CSMWeb:
         self.machine_id = CSMWeb._get_machine_id()
         self.server_node_info = f"server_node>{self.machine_id}"
         self.conf_store_keys = {}
-        self.is_cortxcli_installed = False
-        
+                
     def _validate_nodejs_installed(self):
         Log.info("Validating NodeJS 12.13.0")
         print("Validating NodeJS 12.13.0")
@@ -114,7 +114,7 @@ class CSMWeb:
         Log.info("Validating third party rpms")
         try:
             PkgV().validate("rpms", ["cortx-cli"])
-            self.is_cortxcli_installed = True
+            os.environ["CLI_SETUP"] = "true"            
         except VError as ve:
             Log.error(f"cortx-cli package is not installed: {ve}")
 
@@ -210,25 +210,17 @@ class CSMWeb:
             CSMWeb._run_cmd("cp -r /opt/seagate/cortx/csm/conf/etc/csm /etc/csm")
 
     def post_install(self):
-        """ Performs post install operations. Raises exception on error """
+        """ Performs post install operations for CSM Web as well as cortxcli. Raises exception on error """
         self._validate_nodejs_installed()
-        print("_validate_nodejs_installed done")
         self._validate_cortxcli()
-        print("_validate_cortxcli done")
-        if self.is_cortxcli_installed:
+        if os.environ.get("CLI_SETUP") == "true":
             CSMWeb._run_cmd(f"cli_setup post_install --config {self.conf_url}")
         self._prepare_and_validate_confstore_keys("post_install")
-        print("_prepare_and_validate_confstore_keys done")
         self._set_deployment_mode()
-        print("_set_deployment_mode done")
         self._set_service_user()
-        print("_set_service_user done")
         self._config_user()
-        print("_config_user done")
         self._configure_service_user()
-        print("_configure_service_user done")
         self._allow_access_to_pvt_ports()
-        print("_allow_access_to_pvt_ports done")
         self.create()
         return 0
 
