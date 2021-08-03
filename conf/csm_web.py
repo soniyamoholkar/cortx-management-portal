@@ -118,15 +118,6 @@ class CSMWeb:
         except VError as ve:
             Log.error(f"cortx-cli package is not installed: {ve}")
 
-    def validate_cert_paths(self):
-        Log.info("Validating certificate paths")
-        cert_base_path = Conf.get(CSMWeb.CONSUMER_INDEX, self.conf_store_keys["crt_path_key"])
-        PathV().validate('exists', [
-            f"dir:{cert_base_path}",
-            f"file:{os.path.join(cert_base_path, Conf.get(CSMWeb.CONSUMER_INDEX, self.conf_store_keys['native_crt']))}",
-            f"file:{os.path.join(cert_base_path, Conf.get(CSMWeb.CONSUMER_INDEX, self.conf_store_keys['native_key']))}"
-        ])
-        
     def _set_deployment_mode(self):
         """if Conf.get(CSMWeb.CONSUMER_INDEX, "DEPLOYMENT>mode") == 'dev':
             Log.info("Running Csm Setup for Dev Mode.")
@@ -200,14 +191,6 @@ class CSMWeb:
             raise CSMWebSetupError(rc=_rc,message=f'Obtained non-zero response count for cmd: {cmd} Error: {_err} ')
         return _output, _err, _rc
 
-    def _create_config_backup(self):
-        if os.path.exists("/etc/csm"):
-            Log.info("Creating backup for older csm configurations")
-            CSMWeb._run_cmd(f"cp -r /etc/csm /etc/csm_{str(datetime.now()).replace(' ','T').split('.')[0]}_bkp")
-        else:
-            os.makedirs("/etc/csm", exist_ok=True)
-            CSMWeb._run_cmd("cp -r /opt/seagate/cortx/csm/conf/etc/csm /etc/csm")
-            
     def _fetch_csm_user_password(self, decrypt=False):
         """
         This Method Fetches the Password for CSM User from Provisioner.
@@ -293,12 +276,7 @@ class CSMWeb:
 
     def post_upgrade(self):
         """ Performs Post upgrade functionalitied. Raises exception on error """
-        self._create_config_backup()
-        #self.validate_pkgs()
-        self.post_install()
-        self.prepare()
-        self.config()
-        self.init()
+        
         return 0
 
     def test(self, plan):
