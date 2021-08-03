@@ -107,6 +107,69 @@ class CSMWeb:
         self.conf_store_keys = {}
         self._is_env_dev = False
                 
+    def post_install(self):
+        """ Performs post install operations for CSM Web as well as cortxcli. Raises exception on error """
+        self._validate_nodejs_installed()
+        self._validate_cortxcli()
+        if os.environ.get("CLI_SETUP") == "true":
+            CSMWeb._run_cmd(f"cli_setup post_install --config {self.conf_url}")
+        self._prepare_and_validate_confstore_keys("post_install")
+        self._set_service_user()
+        self._config_user()
+        self._configure_service_user()
+        self._allow_access_to_pvt_ports()
+        return 0
+
+    def prepare(self):
+        """ Performs post install operations. Raises exception on error """
+        if os.environ.get("CLI_SETUP") == "true":
+            CSMWeb._run_cmd(f"cli_setup prepare --config {self.conf_url}")
+        self._prepare_and_validate_confstore_keys("prepare")
+        self._set_deployment_mode()
+        self._set_service_user()
+        self._set_password_to_csm_user()
+        return 0
+
+    def config(self):
+        """ Performs configurations. Raises exception on error """
+        if os.environ.get("CLI_SETUP") == "true":
+            CSMWeb._run_cmd(f"cli_setup config --config {self.conf_url}")
+        self._prepare_and_validate_confstore_keys("config")
+        self._configure_csm_web_keys()
+        return 0
+
+    def init(self):
+        """ Perform initialization. Raises exception on error """
+        if os.environ.get("CLI_SETUP") == "true":
+            CSMWeb._run_cmd(f"cli_setup init --config {self.conf_url}")
+        self._prepare_and_validate_confstore_keys("init")
+        self._config_user_permission()
+        self._run_cmd("systemctl daemon-reload")
+        return 0
+
+    def pre_upgrade(self):
+        """ Performs Pre upgrade functionalitied. Raises exception on error """
+
+        # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
+        return 0
+
+    def post_upgrade(self):
+        """ Performs Post upgrade functionalitied. Raises exception on error """
+        
+        return 0
+
+    def test(self, plan):
+        """ Perform configuration testing. Raises exception on error """
+
+        # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
+        return 0
+
+    def reset(self):
+        """ Performs Configuraiton reset. Raises exception on error """
+
+        # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
+        return 0
+
     def _validate_nodejs_installed(self):
         Log.info("Validating NodeJS 12.13.0")
         PathV().validate('exists', ['file:///opt/nodejs/node-v12.13.0-linux-x64/bin/node'])
@@ -146,6 +209,10 @@ class CSMWeb:
             self.conf_store_keys.update({
                 "cluster_id":f"{self.server_node_info}>cluster_id"
             })
+        if phase == "init":
+            self.conf_store_keys.update({
+                "csm_user_key": "cortx>software>csm>user"
+                })
         elif phase == "post_upgrade":
             self.conf_store_keys.update({
                 "csm_user_key": "cortx>software>csm>user",
@@ -235,73 +302,6 @@ class CSMWeb:
         _password = crypt.crypt(_password, "22")
         self._run_cmd(f"usermod -p {_password} {self._user}")
             
-    def post_install(self):
-        """ Performs post install operations for CSM Web as well as cortxcli. Raises exception on error """
-        self._validate_nodejs_installed()
-        self._validate_cortxcli()
-        if os.environ.get("CLI_SETUP") == "true":
-            CSMWeb._run_cmd(f"cli_setup post_install --config {self.conf_url}")
-        self._prepare_and_validate_confstore_keys("post_install")
-        self._set_service_user()
-        self._config_user()
-        self._configure_service_user()
-        self._allow_access_to_pvt_ports()
-        return 0
-
-    def prepare(self):
-        """ Performs post install operations. Raises exception on error """
-        if os.environ.get("CLI_SETUP") == "true":
-            CSMWeb._run_cmd(f"cli_setup prepare --config {self.conf_url}")
-        self._prepare_and_validate_confstore_keys("prepare")
-        self._set_deployment_mode()
-        self._set_service_user()
-        self._set_password_to_csm_user()
-        return 0
-
-    def config(self):
-        """ Performs configurations. Raises exception on error """
-        if os.environ.get("CLI_SETUP") == "true":
-            CSMWeb._run_cmd(f"cli_setup config --config {self.conf_url}")
-        self._prepare_and_validate_confstore_keys("config")
-        self._configure_csm_web_keys()
-        return 0        
-
-    def init(self):
-        """ Perform initialization. Raises exception on error """
-        
-        return 0
-
-
-    def pre_upgrade(self):
-        """ Performs Pre upgrade functionalitied. Raises exception on error """
-
-        # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
-        return 0
-
-    def post_upgrade(self):
-        """ Performs Post upgrade functionalitied. Raises exception on error """
-        
-        return 0
-
-    def test(self, plan):
-        """ Perform configuration testing. Raises exception on error """
-
-        # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
-        return 0
-
-    def reset(self):
-        """ Performs Configuraiton reset. Raises exception on error """
-
-        # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
-        return 0
-
-    def create(self):
-        """
-        This Function Creates the CSM Conf File on Required Location.
-        :return:
-        """
-        pass
-
     def _set_service_user(self):
         """
         This Method will set the username for service user to Self._user
@@ -393,4 +393,22 @@ class CSMWeb:
         data.append(f"MANAGEMENT_IP={virtual_host}")
         data.append(f"HTTPS_NODE_PORT={port}")
         file_data.dump(("\n").join(data))
+        
+    def _config_user_permission(self):
+        """
+        Allow permission for csm resources
+        """
+        Log.info("Allow permission for csm resources")
+        self._set_service_user()
+        Log.info("Set User Permission")
+        log_path = self._get_log_file_path()
+        os.makedirs(log_path, exist_ok=True)
+        self._run_cmd(f"setfacl -R -m u:{self._user}:rwx {log_path}")
+        
+    def _get_log_file_path(self):
+        Conf.load("env_index", f"properties://{self.CSM_ENV_FILE_PATH}")
+        log_file_path = Conf.get("env_index","LOG_FILE_PATH").replace("\"", "")
+        log_file_dir = os.path.dirname(log_file_path)
+        return log_file_dir
+    
         
