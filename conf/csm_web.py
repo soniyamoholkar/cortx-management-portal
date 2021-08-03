@@ -94,6 +94,7 @@ class CSMWeb:
     CONSUMER_INDEX = "consumer"
     CSM_ENV_FILE_PATH = "/home/934748/git/forkrepo/cortx-management-portal/web/.env"
     CSM_WEB_FILE = "/etc/systemd/system/csm_web.service"
+    CSM_WEB_DIST_ENV_FILE_PATH = "/opt/seagate/cortx/csm/web/web-dist/.env"
 
     def __init__(self, conf_url):
         Conf.init()
@@ -143,7 +144,7 @@ class CSMWeb:
             })
         elif phase == "config":
             self.conf_store_keys.update({
-                
+                "cluster_id":f"{self.server_node_info}>cluster_id"
             })
         elif phase == "post_upgrade":
             self.conf_store_keys.update({
@@ -259,8 +260,11 @@ class CSMWeb:
 
     def config(self):
         """ Performs configurations. Raises exception on error """
-        
-        return 0
+        if os.environ.get("CLI_SETUP") == "true":
+            CSMWeb._run_cmd(f"cli_setup config --config {self.conf_url}")
+        self._prepare_and_validate_confstore_keys("config")
+        self._configure_csm_web_keys()
+        return 0        
 
     def init(self):
         """ Perform initialization. Raises exception on error """
@@ -350,3 +354,43 @@ class CSMWeb:
     def _allow_access_to_pvt_ports(self):
         Log.info("Binding low ports to start a service as non-root")
         CSMWeb._run_cmd("setcap CAP_NET_BIND_SERVICE=+ep /opt/nodejs/node-v12.13.0-linux-x64/bin/node")
+        
+    def _fetch_management_ip(self):
+        cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
+        virtual_host_key = f"cluster>{cluster_id}>network>management>virtual_host"
+        self._validate_conf_store_keys(self.CONSUMER_INDEX,[virtual_host_key])
+        virtual_host = Conf.get(self.CONSUMER_INDEX, virtual_host_key)
+        Log.info(f"Fetch Virtual host: {virtual_host}")
+        return virtual_host
+    
+    def _fetch_port(self):
+        cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
+        virtual_host_port_key = f"cluster>{cluster_id}>network>management>port"
+        virtual_port = 443
+        try:
+            self._validate_conf_store_keys(self.CONSUMER_INDEX,[virtual_host_port_key])
+            virtual_port = Conf.get(self.CONSUMER_INDEX, virtual_host_port_key)
+        except VError as ve:
+            Log.error("Port key does not exist. Set default port as 443 {ve}")
+        
+        Log.info(f"Fetch Virtual host: {virtual_port}")
+        return virtual_port
+        
+    def _configure_csm_web_keys(self):
+        self._run_cmd(f"cp {self.CSM_WEB_DIST_ENV_FILE_PATH} {self.CSM_WEB_DIST_ENV_FILE_PATH}_tmpl")
+        Log.info("Configuring CSM Web keys")
+        virtual_host = self._fetch_management_ip()
+        port = self._fetch_port()
+        Log.info(f"Set MANAGEMENT_IP:{virtual_host} and Port: {port} to csm web config")
+        file_data = Text(self.CSM_WEB_DIST_ENV_FILE_PATH)
+        data = file_data.load().split("\n")
+        for ele in data:
+            print(f"ele: {ele}")
+            if "MANAGEMENT_IP" in ele:
+                data.remove(ele)
+            if "HTTPS_NODE_PORT" in ele:
+                data.remove(ele)
+        data.append(f"MANAGEMENT_IP={virtual_host}")
+        data.append(f"HTTPS_NODE_PORT={port}")
+        file_data.dump(("\n").join(data))
+        
