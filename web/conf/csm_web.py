@@ -189,7 +189,6 @@ class CSMWeb:
         if Conf.get(self.CONSUMER_INDEX, "DEPLOYMENT>mode") == 'dev':
             Log.info("Running Csm Setup for Dev Mode.")
             self._is_env_dev = True
-        print(f"self._is_env_dev: {self._is_env_dev}")
         Log.info("Setting deployment mode.")
 
     def _prepare_and_validate_confstore_keys(self, phase: str):
@@ -385,11 +384,13 @@ class CSMWeb:
         file_data = Text(self.CSM_WEB_DIST_ENV_FILE_PATH)
         data = file_data.load().split("\n")
         for ele in data:
-            print(f"ele: {ele}")
             if "MANAGEMENT_IP" in ele:
                 data.remove(ele)
             if "HTTPS_NODE_PORT" in ele:
                 data.remove(ele)
+            if "HTTPS_NODE_PORT" in ele:
+                data.remove(ele)
+            
         data.append(f"MANAGEMENT_IP={virtual_host}")
         data.append(f"HTTPS_NODE_PORT={port}")
         file_data.dump(("\n").join(data))
