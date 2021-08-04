@@ -168,6 +168,18 @@ class ResetCmd(Cmd):
         rc = self.csm_web.reset()
         return rc
 
+class CleanupCmd(Cmd):
+    """ Reset Setup Cmd """
+    name = "cleanup"
+
+    def __init__(self, args):
+        super().__init__(args)
+        self.csm_web = CSMWeb(args.config)
+
+    def process(self):
+        # TODO: Add actions here
+        rc = self.csm_web.cleanup()
+        return rc
 class PreUpgradeCmd(Cmd):
     """ Reset Setup Cmd """
     name = "pre_upgrade"

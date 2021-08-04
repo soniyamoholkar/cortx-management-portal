@@ -18,6 +18,8 @@ import traceback
 import os
 import pwd
 import crypt
+import time
+import subprocess
 from cortx.utils.log import Log
 from cortx.utils.conf_store import Conf
 from cortx.utils.kv_store.error import KvError
@@ -26,10 +28,8 @@ from cortx.utils.validator.v_pkg import PkgV
 from cortx.utils.validator.v_confkeys import ConfKeysV
 from cortx.utils.security.cipher import Cipher, CipherInvalidToken
 from cortx.utils.validator.v_path import PathV
+from cortx.utils.service.service_handler import Service
 from payload import Text
-from datetime import datetime
-import subprocess
-
 
 class Process:
     def __init__(self, cmd):
@@ -93,12 +93,15 @@ class CSMWeb:
     """ Represents CSMWeb and Performs setup related actions """
     CONSUMER_INDEX = "consumer"
     CSM_ENV_FILE_PATH = "/home/934748/git/forkrepo/cortx-management-portal/web/.env"
-    CSM_WEB_FILE = "/etc/systemd/system/csm_web.service"
     CSM_WEB_DIST_ENV_FILE_PATH = "/opt/seagate/cortx/csm/web/web-dist/.env"
+    CSM_WEB_SERVICE = "/etc/systemd/system/csm_web.service"
+    CSM_WEB_SERVICE_TMPL = "/opt/seagate/cortx/csm/conf/service/csm_web.service"
+    ENV_INDEX = "env_index"
 
     def __init__(self, conf_url):
         Conf.init()
         Conf.load(CSMWeb.CONSUMER_INDEX, conf_url)
+        Conf.load(self.ENV_INDEX, f"properties://{self.CSM_ENV_FILE_PATH}")
         Log.init(service_name = "csm_web_setup", log_path = "/tmp",
                 level="INFO")
         self.conf_url = conf_url
@@ -143,8 +146,18 @@ class CSMWeb:
         if os.environ.get("CLI_SETUP") == "true":
             CSMWeb._run_cmd(f"cli_setup init --config {self.conf_url}")
         self._prepare_and_validate_confstore_keys("init")
+        self._set_service_user()
+        self._configure_ssl_permissions()
         self._config_user_permission()
         self._run_cmd("systemctl daemon-reload")
+        return 0
+    
+    def reset(self):
+        """ Performs Configuraiton reset. Raises exception on error """
+        self._disable_and_stop_service()
+        self._reset_logs()
+        self._directory_cleanup()
+        
         return 0
 
     def pre_upgrade(self):
@@ -164,10 +177,16 @@ class CSMWeb:
         # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
         return 0
 
-    def reset(self):
-        """ Performs Configuraiton reset. Raises exception on error """
-
+    def cleanup(self):
+        """ Performs Configuraiton cleanup. Raises exception on error """
+        self.files_directory_cleanup()
+        self._web_env_file_cleanup()
         # TODO: Perform actual steps. Obtain inputs using Conf.get(index, ..)
+        prefactory = False
+        if prefactory:
+            self._set_service_user()
+            self._replace_csm_service_file()
+            self._service_user_cleanup()
         return 0
 
     def _validate_nodejs_installed(self):
@@ -180,6 +199,7 @@ class CSMWeb:
             PkgV().validate("rpms", ["cortx-cli"])
             os.environ["CLI_SETUP"] = "true"            
         except VError as ve:
+            os.environ["CLI_SETUP"] = "false"
             Log.error(f"cortx-cli package is not installed: {ve}")
 
     def _set_deployment_mode(self):
@@ -210,7 +230,8 @@ class CSMWeb:
             })
         if phase == "init":
             self.conf_store_keys.update({
-                "csm_user_key": "cortx>software>csm>user"
+                "csm_user_key": "cortx>software>csm>user",
+                "cluster_id":f"{self.server_node_info}>cluster_id"
                 })
         elif phase == "post_upgrade":
             self.conf_store_keys.update({
@@ -344,11 +365,11 @@ class CSMWeb:
         :return:
         """
         Log.info(f"Update file for <USER>:{self._user}")
-        service_file_data = Text(self.CSM_WEB_FILE).load()
+        service_file_data = Text(self.CSM_WEB_SERVICE).load()
         if not service_file_data:
-            Log.warn(f"File {self.CSM_WEB_FILE} not updated.")            
+            Log.warn(f"File {self.CSM_WEB_SERVICE} not updated.")            
         data = service_file_data.replace('<USER>', self._user)
-        Text(self.CSM_WEB_FILE).dump(data)
+        Text(self.CSM_WEB_SERVICE).dump(data)
         
     def _allow_access_to_pvt_ports(self):
         Log.info("Binding low ports to start a service as non-root")
@@ -374,6 +395,32 @@ class CSMWeb:
         
         Log.info(f"Fetch Virtual host: {virtual_port}")
         return virtual_port
+    
+    def _fetch_protocol(self):
+        cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
+        protocol_key = f"cluster>{cluster_id}>network>management>protocol"
+        protocol = "https"
+        try:
+            self._validate_conf_store_keys(self.CONSUMER_INDEX,[protocol_key])
+            protocol = Conf.get(self.CONSUMER_INDEX, protocol_key)
+        except VError as ve:
+            Log.error("Protocol key does not exist. Set default port as protocol {ve}")
+        
+        Log.info(f"Fetch protocol: {protocol}")
+        return protocol
+    
+    def _fetch_ssl_path(self):
+        cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
+        ssl_path_key = f"cluster>{cluster_id}>network>management>ssl_path"
+        ssl_path = None
+        try:
+            self._validate_conf_store_keys(self.CONSUMER_INDEX,[ssl_path_key])
+            ssl_path = Conf.get(self.CONSUMER_INDEX, ssl_path_key)
+        except VError as ve:
+            print("SSL path does not exist.")
+            Log.error(f"SSL path does not exist: {ve}")
+        Log.info(f"Fetch SSL Path: {ssl_path}")
+        return ssl_path
         
     def _configure_csm_web_keys(self):
         self._run_cmd(f"cp {self.CSM_WEB_DIST_ENV_FILE_PATH} {self.CSM_WEB_DIST_ENV_FILE_PATH}_tmpl")
@@ -387,10 +434,7 @@ class CSMWeb:
             if "MANAGEMENT_IP" in ele:
                 data.remove(ele)
             if "HTTPS_NODE_PORT" in ele:
-                data.remove(ele)
-            if "HTTPS_NODE_PORT" in ele:
-                data.remove(ele)
-            
+                data.remove(ele)            
         data.append(f"MANAGEMENT_IP={virtual_host}")
         data.append(f"HTTPS_NODE_PORT={port}")
         file_data.dump(("\n").join(data))
@@ -400,16 +444,105 @@ class CSMWeb:
         Allow permission for csm resources
         """
         Log.info("Allow permission for csm resources")
-        self._set_service_user()
-        Log.info("Set User Permission")
         log_path = self._get_log_file_path()
         os.makedirs(log_path, exist_ok=True)
         self._run_cmd(f"setfacl -R -m u:{self._user}:rwx {log_path}")
         
     def _get_log_file_path(self):
-        Conf.load("env_index", f"properties://{self.CSM_ENV_FILE_PATH}")
-        log_file_path = Conf.get("env_index","LOG_FILE_PATH").replace("\"", "")
+        """
+        Get log file path from .env
+        """
+        Log.info("Allow permission for csm resources")
+        log_file_path = Conf.get(self.ENV_INDEX,"LOG_FILE_PATH").replace("\"", "")
         log_file_dir = os.path.dirname(log_file_path)
         return log_file_dir
     
+    def _configure_ssl_permissions(self):
+        """
+        Congigure SSL and set permissions
+        """
+        Log.info("Congigure SSL and set permissions")
+        ssl_path = self._fetch_ssl_path()
+        file_data = Text(self.CSM_WEB_DIST_ENV_FILE_PATH)
+        data = file_data.load().split("\n")            
+        if not ssl_path:
+            print("Setting protocol to http")
+            for ele in data:
+                if "SERVER_PROTOCOL" in ele:
+                    data.remove(ele)
+            data.append(f"SERVER_PROTOCOL=http")
+        else:
+            if os.path.exists(ssl_path):
+                for ele in data:
+                    if "CERT_PATH" in ele:
+                        data.remove(ele)
+                    if "PRV_KEY_PATH" in ele:
+                        data.remove(ele)
+                data.append(f"CERT_PATH={ssl_path}")
+                data.append(f"PRV_KEY_PATH={ssl_path}")
+                #set permissions
+                self._run_cmd(f"setfacl -m u:{self._user}:rwx {ssl_path}")                
+            else:
+                raise CSMWebSetupError(rc=-1, message="SSL file does not exist")
+        file_data.dump(("\n").join(data))
         
+    def _reset_logs(self):
+            Log.info("Reseting log files")
+            log_file_path = Conf.get(self.ENV_INDEX,"LOG_FILE_PATH").replace("\"", "")
+            self._run_cmd(f"truncate -s 0 {log_file_path}")
+    
+    def _disable_and_stop_service(self):
+        try:
+            service_obj = Service(self.CSM_WEB_SERVICE)
+            if service_obj.is_enabled():
+                Log.info(f"Disabling {self.CSM_WEB_SERVICE}")
+                service_obj.disable()
+            if service_obj.get_state().state == 'active':
+                Log.info(f"Stopping {self.CSM_WEB_SERVICE}")
+                service_obj.stop()
+
+            Log.info(f"Checking if {self.CSM_WEB_SERVICE} stopped.")
+            for count in range(0, 10):
+                if not service_obj.get_state().state == 'active':
+                    break
+                time.sleep(2**count)
+            if service_obj.get_state().state == 'active':
+                Log.error(f"{self.CSM_WEB_SERVICE} still active")
+                raise CSMWebSetupError(f"{self.CSM_WEB_SERVICE} still active")
+        except Exception as e:
+            Log.warn(f"{self.CSM_WEB_SERVICE} not available: {e}")
+    
+    def _directory_cleanup(self):
+        Log.info("Deleting files and folders")
+        _path = Conf.get(self.ENV_INDEX,"FILE_UPLOAD_FOLDER").replace("\"", "")
+        Log.info(f"Deleting path :{_path}")
+        self._run_cmd(f"rm -rf {_path}")
+    
+    def files_directory_cleanup(self):
+        log_file_path = Conf.get(self.ENV_INDEX,"LOG_FILE_PATH").replace("\"", "")
+        self._run_cmd(f"rm -rf {log_file_path}")
+    
+    def _web_env_file_cleanup(self):
+        Log.info(f"Replacing {self.CSM_WEB_DIST_ENV_FILE_PATH}​​​​​​​​_tmpl " \
+                                            f"{self.CSM_WEB_DIST_ENV_FILE_PATH}​​​​​​​​")
+        self._run_cmd(f"cp -f {self.CSM_WEB_DIST_ENV_FILE_PATH}​​​​​​​​_tmpl " \
+                                            f"{self.CSM_WEB_DIST_ENV_FILE_PATH}​​​​​​​​")
+    
+    def _replace_csm_service_file(self):
+        '''
+        Service file cleanup
+        '''
+        Log.info(f"Replacing service file.")
+        self._run_cmd(f"cp -f {self.CSM_WEB_SERVICE_TMPL} /etc/systemd/system/") 
+
+    def _service_user_cleanup(self):
+        '''
+        Remove service user if system deployed in dev mode.
+        '''
+        if Conf.get(self.CONSUMER_INDEX, "DEPLOYMENT>mode") == 'dev' and \
+                    self._is_user_exist():
+            Log.info(f"Removing Service user: {self._user}")
+            self._run_cmd(f"userdel -f {self._user}")
+
+
+            
