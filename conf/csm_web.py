@@ -327,15 +327,15 @@ class CSMWeb:
         If reset true then delete user
         """
         if not self._is_user_exist():
-            Log.info("Creating CSM User without password.")
+            Log.info("Creating Service User without password.")
             CSMWeb._run_cmd((f"useradd -M {self._user}"))
-            Log.info("Adding CSM User to Wheel Group.")
+            Log.info("Adding Service User to Wheel Group.")
             CSMWeb._run_cmd(f"usermod -aG wheel {self._user}")
-            Log.info("Enabling nologin for CSM user.")
+            Log.info("Enabling nologin for Service user.")
             CSMWeb._run_cmd(f"usermod -s /sbin/nologin {self._user}")
             if not self._is_user_exist():
-                Log.error("Csm User Creation Failed.")
-                raise CSMWebSetupError(rc=-1, message=f"Unable to create {self._user} user")
+                Log.error("Service User Creation Failed.")
+                raise CSMWebSetupError(rc=-1, message=f"Unable to create {self._user} user")            
         else:
             Log.info(f"User {self._user} already exist")
             

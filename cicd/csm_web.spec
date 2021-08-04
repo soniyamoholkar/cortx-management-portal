@@ -19,7 +19,7 @@ Version: %{version}
 Release: %{dist}
 Summary: CSM Tools
 License: Seagate
-URL: http://gitlab.mero.colo.seagate.com/eos/csm
+URL: https://github.com/Seagate/cortx-management-portal
 Source0: <PRODUCT>-csm_web-%{version}.tar.gz
 %define debug_package %{nil}
 
