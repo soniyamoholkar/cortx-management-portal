@@ -138,6 +138,7 @@ class CSMWeb:
         if os.environ.get("CLI_SETUP") == "true":
             CSMWeb._run_cmd(f"cli_setup config --config {self.conf_url}")
         self._prepare_and_validate_confstore_keys("config")
+        self._set_deployment_mode()
         self._configure_csm_web_keys()
         return 0
 
@@ -380,34 +381,24 @@ class CSMWeb:
         virtual_host_key = f"cluster>{cluster_id}>network>management>virtual_host"
         self._validate_conf_store_keys(self.CONSUMER_INDEX,[virtual_host_key])
         virtual_host = Conf.get(self.CONSUMER_INDEX, virtual_host_key)
+        if not virtual_host and not self._is_env_dev:
+            Log.error("Management IP is not provided hence raising error.")
+            raise CSMWebSetupError(rc=-1, message="Management IP is not provided.")
         Log.info(f"Fetch Virtual host: {virtual_host}")
         return virtual_host
     
-    def _fetch_port(self):
+    def _fetch_key_value(self, key: str, default_value: any):
         cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
-        virtual_host_port_key = f"cluster>{cluster_id}>network>management>port"
-        virtual_port = 443
+        key = f"cluster>{cluster_id}>network>management>{key}"
+        value = default_value
         try:
-            self._validate_conf_store_keys(self.CONSUMER_INDEX,[virtual_host_port_key])
-            virtual_port = Conf.get(self.CONSUMER_INDEX, virtual_host_port_key)
-        except VError as ve:
-            Log.error("Port key does not exist. Set default port as 443 {ve}")
-        
-        Log.info(f"Fetch Virtual host: {virtual_port}")
-        return virtual_port
-    
-    def _fetch_protocol(self):
-        cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
-        protocol_key = f"cluster>{cluster_id}>network>management>protocol"
-        protocol = "https"
-        try:
-            self._validate_conf_store_keys(self.CONSUMER_INDEX,[protocol_key])
-            protocol = Conf.get(self.CONSUMER_INDEX, protocol_key)
+            self._validate_conf_store_keys(self.CONSUMER_INDEX,[key])
+            value = Conf.get(self.CONSUMER_INDEX, key)
         except VError as ve:
             Log.error("Protocol key does not exist. Set default port as protocol {ve}")
         
-        Log.info(f"Fetch protocol: {protocol}")
-        return protocol
+        Log.info(f"Fetch {key}: {value}")
+        return value
     
     def _fetch_ssl_path(self):
         cluster_id = Conf.get(self.CONSUMER_INDEX, self.conf_store_keys["cluster_id"])
@@ -426,17 +417,37 @@ class CSMWeb:
         self._run_cmd(f"cp {self.CSM_WEB_DIST_ENV_FILE_PATH} {self.CSM_WEB_DIST_ENV_FILE_PATH}_tmpl")
         Log.info("Configuring CSM Web keys")
         virtual_host = self._fetch_management_ip()
-        port = self._fetch_port()
-        Log.info(f"Set MANAGEMENT_IP:{virtual_host} and Port: {port} to csm web config")
+        https_port = self._fetch_key_value("https_port", 443)
+        http_port = self._fetch_key_value("http_port", 80)
+        server_protocol = self._fetch_key_value("protocol", "https")
+        agent_host = self._fetch_key_value("agent_host", "localhost")
+        agent_port = self._fetch_key_value("agent_port", "28101")
+        agent_protocol = self._fetch_key_value("agent_protocol", "http")
+        Log.info(f"Set MANAGEMENT_IP:{virtual_host} and Port: {https_port} to csm web config")
         file_data = Text(self.CSM_WEB_DIST_ENV_FILE_PATH)
         data = file_data.load().split("\n")
         for ele in data:
             if "MANAGEMENT_IP" in ele:
                 data.remove(ele)
             if "HTTPS_NODE_PORT" in ele:
-                data.remove(ele)            
+                data.remove(ele)
+            if "HTTP_NODE_PORT" in ele:
+                data.remove(ele)
+            if "SERVER_PROTOCOL" in ele:
+                data.remove(ele)
+            if "CSM_AGENT_HOST" in ele:
+                data.remove(ele)
+            if "CSM_AGENT_PORT" in ele:
+                data.remove(ele)
+            if "CSM_AGENT_PROTOCOL" in ele:
+                data.remove(ele)
         data.append(f"MANAGEMENT_IP={virtual_host}")
-        data.append(f"HTTPS_NODE_PORT={port}")
+        data.append(f"HTTPS_NODE_PORT={https_port}")
+        data.append(f"HTTP_NODE_PORT={http_port}")
+        data.append(f"SERVER_PROTOCOL={server_protocol}")
+        data.append(f"CSM_AGENT_HOST={agent_host}")
+        data.append(f"CSM_AGENT_PORT={agent_port}")
+        data.append(f"CSM_AGENT_PROTOCOL={agent_protocol}")
         file_data.dump(("\n").join(data))
         
     def _config_user_permission(self):
