@@ -92,7 +92,6 @@ class CSMWebSetupError(Exception):
 class CSMWeb:
     """ Represents CSMWeb and Performs setup related actions """
     CONSUMER_INDEX = "consumer"
-    CSM_ENV_FILE_PATH = "/home/934748/git/forkrepo/cortx-management-portal/web/.env"
     CSM_WEB_DIST_ENV_FILE_PATH = "/opt/seagate/cortx/csm/web/web-dist/.env"
     CSM_WEB_SERVICE = "/etc/systemd/system/csm_web.service"
     CSM_WEB_SERVICE_TMPL = "/opt/seagate/cortx/csm/conf/service/csm_web.service"
@@ -101,7 +100,7 @@ class CSMWeb:
     def __init__(self, conf_url):
         Conf.init()
         Conf.load(CSMWeb.CONSUMER_INDEX, conf_url)
-        Conf.load(self.ENV_INDEX, f"properties://{self.CSM_ENV_FILE_PATH}")
+        Conf.load(self.ENV_INDEX, f"properties://{self.CSM_WEB_DIST_ENV_FILE_PATH}")
         Log.init(service_name = "csm_web_setup", log_path = "/tmp",
                 level="INFO")
         self.conf_url = conf_url
@@ -474,6 +473,7 @@ class CSMWeb:
         """
         Log.info("Congigure SSL and set permissions")
         ssl_path = self._fetch_ssl_path()
+        self._run_cmd(f"cp {self.CSM_WEB_DIST_ENV_FILE_PATH} {self.CSM_WEB_DIST_ENV_FILE_PATH}_tmpl")
         file_data = Text(self.CSM_WEB_DIST_ENV_FILE_PATH)
         data = file_data.load().split("\n")            
         if not ssl_path:
